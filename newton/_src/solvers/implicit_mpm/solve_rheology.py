@@ -1580,6 +1580,7 @@ def _run_solver_loop(
     use_graph: bool,
     verbose: bool,
     temporary_store: fem.TemporaryStore,
+    iteration_count_out: "wp.array[int] | None" = None,
 ):
     solve_graph = None
     if use_graph:
@@ -1628,6 +1629,10 @@ def _run_solver_loop(
                     f"{rheology_solver.name} terminated after {iteration_and_condition.numpy()[0]} iterations with residuals {res_l2}, {res_linf}"
                 )
 
+        if iteration_count_out is not None:
+            # Device-to-device, so the readout is recorded when an outer capture is active.
+            wp.copy(iteration_count_out, iteration)
+
         iteration_and_condition.release()
     else:
         solve_granularity = rheology_solver.solve_granularity
@@ -1661,6 +1666,7 @@ def solve_rheology(
     temporary_store: fem.TemporaryStore | None = None,
     use_graph: bool = True,
     verbose: bool | None = None,
+    iteration_count_out: "wp.array[int] | None" = None,
 ):
     """Solve coupled plasticity and collider contact to compute grid velocities.
 
@@ -1712,6 +1718,11 @@ def solve_rheology(
         use_graph: If True, uses conditional CUDA graphs for the iteration loop.
         verbose: If True, print residuals/iteration counts. If False, suppress details. If None, print details when
             ``wp.config.log_level`` is configured for debug logging.
+        iteration_count_out: Optional persistent device array of shape ``(1,)`` receiving
+            the iteration count reached by the graph-based solver loop. Written
+            device-to-device before the loop's temporaries are released, so the count
+            stays readable after capture and replay. Only written when ``use_graph``
+            routes into the graph-based loop.
 
     Returns:
         A captured execution graph handle when ``use_graph`` is True and the
@@ -1784,7 +1795,15 @@ def solve_rheology(
     rheology_solver.apply_initial_guess()
 
     solve_graph = _run_solver_loop(
-        rheology_solver, contact_solver, max_iterations, tolerance, tolerance_scale, use_graph, verbose, temporary_store
+        rheology_solver,
+        contact_solver,
+        max_iterations,
+        tolerance,
+        tolerance_scale,
+        use_graph,
+        verbose,
+        temporary_store,
+        iteration_count_out=iteration_count_out,
     )
 
     # release temporary storage

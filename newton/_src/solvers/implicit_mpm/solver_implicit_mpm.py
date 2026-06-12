@@ -982,6 +982,10 @@ class SolverImplicitMPM(SolverBase):
 
         self._use_cuda_graph = self.model.device.is_cuda and wp.is_conditional_graph_supported()
 
+        # Persistent readout of the last rheology solve's iteration count; written
+        # device-to-device by the graph-based solver loop so it survives graph capture.
+        self._rheology_iteration_count = wp.zeros(1, dtype=int, device=self.model.device)
+
         self._timers_use_nvtx = False
 
         # Pre-allocate scratchpad and last step data so that step() can be graph-captured
@@ -1118,6 +1122,17 @@ class SolverImplicitMPM(SolverBase):
             Per-collider body index array. Value is -1 for colliders that are not bodies.
         """
         return self._mpm_model.collider.collider_body_index
+
+    @property
+    def last_rheology_iterations(self) -> int:
+        """Iteration count reached by the most recent rheology solve.
+
+        Written by the graph-based solver loop (CUDA devices supporting conditional
+        graph capture), including under whole-step graph capture: read after a step
+        or after a graph replay. Performs a synchronous device-to-host read, so do
+        not call while a graph capture is active.
+        """
+        return int(self._rheology_iteration_count.numpy()[0])
 
     def project_outside(self, state_in: newton.State, state_out: newton.State, dt: float, gap: float | None = None):
         """Project particles outside of colliders, and adjust their velocity and velocity gradients
@@ -2186,6 +2201,7 @@ class SolverImplicitMPM(SolverBase):
                 temporary_store=self.temporary_store,
                 use_graph=self._use_cuda_graph,
                 verbose=self.verbose,
+                iteration_count_out=self._rheology_iteration_count,
             )
 
         self._unapply_strain_eigenbasis(scratch, M_ev)
